@@ -6,6 +6,7 @@ package value
 // Example : Value1 = Value2 + Value3
 type Value struct {
 	Data      int
+	Grad      int
 	Operation string
 	Prev      []*Value
 	Label     string
@@ -23,5 +24,30 @@ func (V *Value) Add(a *Value, label string) *Value {
 	operandA := a
 	operandB := V
 	children := []*Value{operandA, operandB}
+	return &Value{Data: data, Operation: Operation, Label: label, Prev: children}
+}
+
+func (V *Value) Mult(a *Value, label string) *Value {
+	data := V.Data * a.Data
+	// Add the operation string for visualization
+	Operation := "*"
+	// Add the operands of the addition as their child nodes
+	operandA := a
+	operandB := V
+	children := []*Value{operandA, operandB}
+	return &Value{Data: data, Operation: Operation, Label: label, Prev: children}
+}
+
+func (V *Value) Sub(a *Value, label string) *Value {
+	data := V.Data - a.Data
+	Operation := "-"
+	children := []*Value{V, a}
+	return &Value{Data: data, Operation: Operation, Label: label, Prev: children}
+}
+
+func (V *Value) Div(a *Value, label string) *Value {
+	data := V.Data / a.Data
+	Operation := "/"
+	children := []*Value{V, a}
 	return &Value{Data: data, Operation: Operation, Label: label, Prev: children}
 }

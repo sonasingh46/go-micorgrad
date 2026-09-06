@@ -78,7 +78,7 @@ func dot(root *value.Value) string {
 		}
 		visited[v] = true
 
-		fmt.Fprintf(&b, "\t%q [shape=record label=\"{ %s | data %d }\"]\n", nodeID(v), escape(v.Label), v.Data)
+		fmt.Fprintf(&b, "\t%q [shape=record label=\"{ %s | data %d | grad %d }\"]\n", nodeID(v), escape(v.Label), v.Data, v.Grad)
 		if v.Operation != "" {
 			fmt.Fprintf(&b, "\t%q [label=%q]\n", opID(v), v.Operation)
 			fmt.Fprintf(&b, "\t%q -> %q\n", opID(v), nodeID(v))
