@@ -1,0 +1,43 @@
+name: Release
+on:
+  push:
+    branches:
+      - "releases/**"
+
+permissions:
+  contents: read
+
+jobs:
+  Release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: true
+
+      - name: Extract build info
+        id: extract_build_info
+        run: echo "tag=${GITHUB_REF##*/}" >> $GITHUB_OUTPUT
+
+      # Stands in for the merge-to-main run, which leaves a draft behind.
+      - name: Create draft like merge-to-main
+        uses: release-drafter/release-drafter@34d80673e067bdc0c24568d3af899c216adcfaa9
+        with:
+          commitish: main
+          publish: false
+
+      - name: Tag Release
+        run: |
+          git tag ${{ steps.extract_build_info.outputs.tag }}
+          git push origin ${{ steps.extract_build_info.outputs.tag }}
+
+      - name: Publish Release Notes
+        uses: release-drafter/release-drafter@34d80673e067bdc0c24568d3af899c216adcfaa9
+        with:
+          commitish: ${{ github.ref }}
+          tag: ${{ steps.extract_build_info.outputs.tag }}
+          name: ${{ steps.extract_build_info.outputs.tag }}
+          publish: true
