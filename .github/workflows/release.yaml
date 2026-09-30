@@ -28,44 +28,40 @@ jobs:
           commitish: main
           publish: false
 
+      - name: Start proxy that fails release update calls
+        run: |
+          pipx install mitmproxy > /dev/null
+          echo 4 > /tmp/fail_left
+          nohup mitmdump -q --listen-port 8080 -s .github/test/fail_release_patch.py > /tmp/mitm.log 2>&1 &
+          for i in $(seq 30); do [ -f ~/.mitmproxy/mitmproxy-ca-cert.pem ] && break; sleep 1; done
+
+      # A tag left behind by an earlier attempt is not an error. Skipping it lets
+      # "Re-run failed jobs" get past this step when only the release notes
+      # failed.
       - name: Tag Release
+        shell: bash
         env:
           TAG: ${{ steps.extract_build_info.outputs.tag }}
         run: |
-          git tag "${TAG}"
-          git push origin "${TAG}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" > /dev/null; then
+            echo "Tag ${TAG} already exists, not creating it again"
+          else
+            git tag "${TAG}"
+            git push origin "${TAG}"
+          fi
 
-      - name: Start proxy that fails the release update
-        run: |
-          pipx install mitmproxy > /dev/null
-          echo empty > /tmp/mode
-          nohup mitmdump -q --listen-port 8080 -s .github/test/fail_release_patch.py > /tmp/mitm.log 2>&1 &
-          for i in $(seq 30); do [ -f ~/.mitmproxy/mitmproxy-ca-cert.pem ] && break; sleep 1; done
-          ls -l ~/.mitmproxy/mitmproxy-ca-cert.pem
-
-      - name: Publish Release Notes (502, empty body)
-        id: empty_body
+      # release-drafter only reports error.message. A GitHub API error with an
+      # empty body, such as a 502 from the gateway, fails the step with no
+      # error at all. NODE_DEBUG=fetch makes Node log the method, URL and HTTP
+      # status of every request, so the failing call shows up in the log. It
+      # never logs headers, so the token stays out of the log. Both attempts
+      # may fail, and the check below decides whether the job fails.
+      - name: Publish Release Notes
+        id: publish_release_notes
         continue-on-error: true
-        uses: release-drafter/release-drafter@34d80673e067bdc0c24568d3af899c216adcfaa9
+        uses: release-drafter/release-drafter@34d80673e067bdc0c24568d3af899c216adcfaa9 # v7.7.0
         env:
-          HTTPS_PROXY: http://127.0.0.1:8080
-          NODE_USE_ENV_PROXY: "1"
-          NODE_EXTRA_CA_CERTS: /home/runner/.mitmproxy/mitmproxy-ca-cert.pem
           NODE_DEBUG: fetch
-        with:
-          commitish: ${{ github.ref }}
-          tag: ${{ steps.extract_build_info.outputs.tag }}
-          name: ${{ steps.extract_build_info.outputs.tag }}
-          publish: true
-
-      - name: Switch proxy to a JSON error body
-        run: echo json > /tmp/mode
-
-      - name: Publish Release Notes (502, JSON body)
-        id: json_body
-        continue-on-error: true
-        uses: release-drafter/release-drafter@34d80673e067bdc0c24568d3af899c216adcfaa9
-        env:
           HTTPS_PROXY: http://127.0.0.1:8080
           NODE_USE_ENV_PROXY: "1"
           NODE_EXTRA_CA_CERTS: /home/runner/.mitmproxy/mitmproxy-ca-cert.pem
@@ -74,12 +70,43 @@ jobs:
           tag: ${{ steps.extract_build_info.outputs.tag }}
           name: ${{ steps.extract_build_info.outputs.tag }}
           publish: true
+
+      - name: Retry Publish Release Notes
+        id: retry_publish_release_notes
+        if: steps.publish_release_notes.outcome == 'failure'
+        continue-on-error: true
+        uses: release-drafter/release-drafter@34d80673e067bdc0c24568d3af899c216adcfaa9 # v7.7.0
+        env:
+          NODE_DEBUG: fetch
+          HTTPS_PROXY: http://127.0.0.1:8080
+          NODE_USE_ENV_PROXY: "1"
+          NODE_EXTRA_CA_CERTS: /home/runner/.mitmproxy/mitmproxy-ca-cert.pem
+        with:
+          commitish: ${{ github.ref }}
+          tag: ${{ steps.extract_build_info.outputs.tag }}
+          name: ${{ steps.extract_build_info.outputs.tag }}
+          publish: true
+
+      # The releases/tags endpoint only returns published releases. A release
+      # that is still a draft, or missing, gives a 404 here.
+      - name: Check the release is published
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.extract_build_info.outputs.tag }}
+          FIRST_ATTEMPT: ${{ steps.publish_release_notes.outcome }}
+          RETRY: ${{ steps.retry_publish_release_notes.outcome }}
+        run: |
+          echo "Publish Release Notes: ${FIRST_ATTEMPT}, retry: ${RETRY}"
+          if ! release=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" \
+              --jq '"\(.html_url) (target \(.target_commitish))"' 2>&1); then
+            echo "::error::Release ${TAG} is not published: ${release}"
+            echo "The FETCH lines in the Publish Release Notes steps show the HTTP status of each call."
+            echo "The draft release is left as it is. Publish it by hand or re-run the failed jobs."
+            exit 1
+          fi
+          echo "Release ${TAG} is published: ${release}"
 
       - name: Show what the proxy answered
         if: always()
-        env:
-          EMPTY: ${{ steps.empty_body.outcome }}
-          JSON: ${{ steps.json_body.outcome }}
-        run: |
-          echo "empty body step: ${EMPTY}, json body step: ${JSON}"
-          cat /tmp/mitm.log
+        run: cat /tmp/mitm.log
