@@ -51,6 +51,7 @@ jobs:
           HTTPS_PROXY: http://127.0.0.1:8080
           NODE_USE_ENV_PROXY: "1"
           NODE_EXTRA_CA_CERTS: /home/runner/.mitmproxy/mitmproxy-ca-cert.pem
+          NODE_DEBUG: fetch
         with:
           commitish: ${{ github.ref }}
           tag: ${{ steps.extract_build_info.outputs.tag }}
