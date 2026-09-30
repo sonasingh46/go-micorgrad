@@ -13,9 +13,6 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-    env:
-      FIRST_TOKEN: ${{ vars.BREAK_FIRST == 'true' && 'bad-token' || github.token }}
-      RETRY_TOKEN: ${{ vars.BREAK_RETRY == 'true' && 'bad-token' || github.token }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -31,62 +28,59 @@ jobs:
           commitish: main
           publish: false
 
-      # A tag left behind by an earlier attempt is not an error. Skipping it lets
-      # "Re-run failed jobs" get past this step when only the release notes
-      # failed.
       - name: Tag Release
-        shell: bash
         env:
           TAG: ${{ steps.extract_build_info.outputs.tag }}
         run: |
-          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" > /dev/null; then
-            echo "Tag ${TAG} already exists, not creating it again"
-          else
-            git tag "${TAG}"
-            git push origin "${TAG}"
-          fi
+          git tag "${TAG}"
+          git push origin "${TAG}"
 
-      # release-drafter only reports error.message. When the GitHub API call
-      # fails with an empty message, the step fails without saying why. So both
-      # attempts may fail, and the check below decides whether the job fails.
-      - name: Publish Release Notes
-        id: publish_release_notes
+      - name: Start proxy that fails the release update
+        run: |
+          pipx install mitmproxy > /dev/null
+          echo empty > /tmp/mode
+          nohup mitmdump -q --listen-port 8080 -s .github/test/fail_release_patch.py > /tmp/mitm.log 2>&1 &
+          for i in $(seq 30); do [ -f ~/.mitmproxy/mitmproxy-ca-cert.pem ] && break; sleep 1; done
+          ls -l ~/.mitmproxy/mitmproxy-ca-cert.pem
+          ls /home/runner/actions-runner/cached/externals 2>/dev/null || true
+          find / -path '*externals/node24/bin/node' 2>/dev/null | head -1 | xargs -I{} {} --version
+
+      - name: Publish Release Notes (502, empty body)
+        id: empty_body
         continue-on-error: true
-        uses: release-drafter/release-drafter@34d80673e067bdc0c24568d3af899c216adcfaa9 # v7.7.0
+        uses: release-drafter/release-drafter@34d80673e067bdc0c24568d3af899c216adcfaa9
+        env:
+          HTTPS_PROXY: http://127.0.0.1:8080
+          NODE_USE_ENV_PROXY: "1"
+          NODE_EXTRA_CA_CERTS: /home/runner/.mitmproxy/mitmproxy-ca-cert.pem
         with:
           commitish: ${{ github.ref }}
           tag: ${{ steps.extract_build_info.outputs.tag }}
           name: ${{ steps.extract_build_info.outputs.tag }}
           publish: true
-          token: ${{ env.FIRST_TOKEN }}
 
-      - name: Retry Publish Release Notes
-        id: retry_publish_release_notes
-        if: steps.publish_release_notes.outcome == 'failure'
+      - name: Switch proxy to a JSON error body
+        run: echo json > /tmp/mode
+
+      - name: Publish Release Notes (502, JSON body)
+        id: json_body
         continue-on-error: true
-        uses: release-drafter/release-drafter@34d80673e067bdc0c24568d3af899c216adcfaa9 # v7.7.0
+        uses: release-drafter/release-drafter@34d80673e067bdc0c24568d3af899c216adcfaa9
+        env:
+          HTTPS_PROXY: http://127.0.0.1:8080
+          NODE_USE_ENV_PROXY: "1"
+          NODE_EXTRA_CA_CERTS: /home/runner/.mitmproxy/mitmproxy-ca-cert.pem
         with:
           commitish: ${{ github.ref }}
           tag: ${{ steps.extract_build_info.outputs.tag }}
           name: ${{ steps.extract_build_info.outputs.tag }}
           publish: true
-          token: ${{ env.RETRY_TOKEN }}
 
-      # The releases/tags endpoint only returns published releases. A release
-      # that is still a draft, or missing, gives a 404 here.
-      - name: Check the release is published
-        shell: bash
+      - name: Show what the proxy answered
+        if: always()
         env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.extract_build_info.outputs.tag }}
-          FIRST_ATTEMPT: ${{ steps.publish_release_notes.outcome }}
-          RETRY: ${{ steps.retry_publish_release_notes.outcome }}
+          EMPTY: ${{ steps.empty_body.outcome }}
+          JSON: ${{ steps.json_body.outcome }}
         run: |
-          echo "Publish Release Notes: ${FIRST_ATTEMPT}, retry: ${RETRY:-not run}"
-          if ! release=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" \
-              --jq '"\(.html_url) (target \(.target_commitish))"' 2>&1); then
-            echo "::error::Release ${TAG} is not published: ${release}"
-            echo "The draft release is left as it is. Publish it by hand or re-run the failed jobs."
-            exit 1
-          fi
-          echo "Release ${TAG} is published: ${release}"
+          echo "empty body step: ${EMPTY}, json body step: ${JSON}"
+          cat /tmp/mitm.log
