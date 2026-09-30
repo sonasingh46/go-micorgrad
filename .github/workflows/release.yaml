@@ -31,7 +31,7 @@ jobs:
       - name: Start proxy that fails release update calls
         run: |
           pipx install mitmproxy > /dev/null
-          echo 4 > /tmp/fail_left
+          echo 8 > /tmp/fail_left
           nohup mitmdump -q --listen-port 8080 -s .github/test/fail_release_patch.py > /tmp/mitm.log 2>&1 &
           for i in $(seq 30); do [ -f ~/.mitmproxy/mitmproxy-ca-cert.pem ] && break; sleep 1; done
 
